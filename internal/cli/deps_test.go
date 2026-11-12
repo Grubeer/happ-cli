@@ -147,6 +147,27 @@ func TestSubAddWithMock(t *testing.T) {
 	}
 }
 
+func TestSubAddURLStdinSanitizesFetchError(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	secretURL := "https://user:super-secret@example.invalid/token/credential"
+	deps := withDeps()
+	deps.Fetch = &mockFetcher{fn: func(ctx context.Context, url, ua string, h http.Header) (*profile.Subscription, error) {
+		return nil, fmt.Errorf("failed fetching %s", url)
+	}}
+	cmd := subAddCmd(deps)
+	cmd.SetIn(strings.NewReader(secretURL + "\n"))
+	if err := cmd.Flags().Parse([]string{"--url-stdin"}); err != nil {
+		t.Fatal(err)
+	}
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("expected fetch error")
+	}
+	if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), "credential") {
+		t.Fatalf("stdin URL leaked in error: %v", err)
+	}
+}
+
 func TestSubRemoveWithMock(t *testing.T) {
 	deps := withDeps()
 	deps.Store.(*mockStore).subs = []store.SubEntry{

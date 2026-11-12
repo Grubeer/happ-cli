@@ -420,3 +420,47 @@ func TestBuildConfigExclusionDomainOnly(t *testing.T) {
 		t.Error("domain-only exclusions must not emit an ip rule part")
 	}
 }
+
+func TestBuildConfigIncludeAndDefaultDirectRoutingOrder(t *testing.T) {
+	s := &link.Server{Protocol: "vless", Address: "h", Port: 443, UUID: "u"}
+	m := buildMap(t, s, Options{SocksPort: 10808, Exclude: []string{"private.example"}, Include: []string{"example.com", "192.0.2.0/24"}, DefaultOutbound: "direct"})
+	rules := get(t, m, "routing.rules").([]any)
+	if len(rules) != 4 {
+		t.Fatalf("got %d rules, want exclude domain + include domain/IP + default direct", len(rules))
+	}
+	if got := get(t, m, "routing.rules.0.outboundTag"); got != "direct" {
+		t.Errorf("exclude tag = %v", got)
+	}
+	if got := get(t, m, "routing.rules.1.domain.0"); got != "domain:example.com" {
+		t.Errorf("include domain = %v", got)
+	}
+	if got := get(t, m, "routing.rules.1.outboundTag"); got != "proxy" {
+		t.Errorf("include tag = %v", got)
+	}
+	if got := get(t, m, "routing.rules.2.ip.0"); got != "192.0.2.0/24" {
+		t.Errorf("include IP = %v", got)
+	}
+	if got := get(t, m, "routing.rules.2.outboundTag"); got != "proxy" {
+		t.Errorf("include IP tag = %v", got)
+	}
+	if got := get(t, m, "routing.rules.3.outboundTag"); got != "direct" {
+		t.Errorf("default tag = %v", got)
+	}
+	if got := get(t, m, "routing.rules.3.network"); got != "tcp,udp" {
+		t.Errorf("default network = %v", got)
+	}
+}
+
+func TestBuildConfigRejectsInvalidDefaultOutbound(t *testing.T) {
+	s := &link.Server{Protocol: "vless", Address: "h", Port: 443, UUID: "u"}
+	if _, err := BuildConfig(s, Options{SocksPort: 10808, DefaultOutbound: "typo"}); err == nil {
+		t.Fatal("expected invalid default outbound error")
+	}
+}
+
+func TestBuildConfigRejectsInvalidIncludeInsteadOfDirectFallback(t *testing.T) {
+	s := &link.Server{Protocol: "vless", Address: "h", Port: 443, UUID: "u"}
+	if _, err := BuildConfig(s, Options{SocksPort: 10808, Include: []string{"192.0.2.0/999"}, DefaultOutbound: "direct"}); err == nil {
+		t.Fatal("invalid VPN include must fail, not silently route direct")
+	}
+}

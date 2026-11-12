@@ -26,8 +26,11 @@ type Connect struct {
 	AutoUpdate bool `yaml:"auto-update"`
 	// Exclude lists domains/IPs that bypass the tunnel; ExcludeFile is a file
 	// with one entry per line (default: exclude.txt next to config.yaml).
-	Exclude     []string `yaml:"exclude"`
-	ExcludeFile string   `yaml:"exclude-file"`
+	Exclude         []string `yaml:"exclude"`
+	ExcludeFile     string   `yaml:"exclude-file"`
+	Include         []string `yaml:"include"`
+	IncludeFile     string   `yaml:"include-file"`
+	DefaultOutbound string   `yaml:"default-outbound"`
 }
 
 // File is the root config structure.
@@ -39,13 +42,14 @@ type File struct {
 func Default() *File {
 	return &File{
 		Connect: Connect{
-			Mode:          "proxy",
-			SocksPort:     10808,
-			HTTPPort:      10809,
-			CheckInterval: 60,
-			CheckURL:      "https://cloudflare.com/cdn-cgi/trace",
-			DNSProxy:      true,
-			AutoUpdate:    false,
+			Mode:            "proxy",
+			SocksPort:       10808,
+			HTTPPort:        10809,
+			CheckInterval:   60,
+			CheckURL:        "https://cloudflare.com/cdn-cgi/trace",
+			DNSProxy:        true,
+			AutoUpdate:      false,
+			DefaultOutbound: "proxy",
 		},
 	}
 }

@@ -21,7 +21,9 @@ type Options struct {
 
 	// Exclude holds raw exclusion entries (domains and IPv4 CIDRs) that must
 	// bypass the proxy and go out via the direct outbound.
-	Exclude []string
+	Exclude         []string
+	Include         []string
+	DefaultOutbound string
 	// DirectMark is the SO_MARK applied to the direct outbound; 0 means no
 	// mark. On Linux TUN mode the tunnel adds a matching `ip rule fwmark`
 	// so direct connections do not loop back into the TUN device.
@@ -48,6 +50,7 @@ type RoutingConfig struct {
 // RoutingRule sends matching traffic to OutboundTag.
 type RoutingRule struct {
 	Type        string   `json:"type"`
+	Network     string   `json:"network,omitempty"`
 	Domain      []string `json:"domain,omitempty"`
 	IP          []string `json:"ip,omitempty"`
 	OutboundTag string   `json:"outboundTag"`
@@ -164,6 +167,12 @@ type UDPMask struct {
 
 // BuildConfig turns a server and inbound options into an xray Config.
 func BuildConfig(s *link.Server, opts Options) (*Config, error) {
+	if opts.DefaultOutbound != "" && opts.DefaultOutbound != "proxy" && opts.DefaultOutbound != "direct" {
+		return nil, fmt.Errorf("invalid default outbound %q", opts.DefaultOutbound)
+	}
+	if _, errs := ParseExclusions(opts.Include); len(errs) > 0 {
+		return nil, fmt.Errorf("invalid include rule: %w", errs[0])
+	}
 	out, err := buildOutbound(s)
 	if err != nil {
 		return nil, err
@@ -198,7 +207,7 @@ func BuildConfig(s *link.Server, opts Options) (*Config, error) {
 			direct,
 			{Tag: "block", Protocol: "blackhole"},
 		},
-		Routing: buildRouting(exclusions),
+		Routing: buildRouting(exclusions, opts.Include, opts.DefaultOutbound),
 	}
 	if opts.DNSProxy {
 		cfg.DNS = &DNSConfig{Servers: []string{"1.1.1.1", "8.8.8.8"}}
@@ -209,19 +218,36 @@ func BuildConfig(s *link.Server, opts Options) (*Config, error) {
 // buildRouting produces the exclude rules: one domain rule and/or one IP rule,
 // both pointing at the direct outbound. nil when there is nothing to exclude,
 // so the "routing" key is omitted entirely.
-func buildRouting(exclusions []Exclusion) *RoutingConfig {
+func buildRouting(exclusions []Exclusion, includes []string, defaultOutbound string) *RoutingConfig {
+	if defaultOutbound == "" {
+		defaultOutbound = "proxy"
+	}
 	domains := ExcludedDomains(exclusions)
 	cidrs := ExcludedCIDRs(exclusions)
-	if len(domains) == 0 && len(cidrs) == 0 {
+	if defaultOutbound != "proxy" && defaultOutbound != "direct" {
 		return nil
 	}
-
 	var rules []RoutingRule
 	if len(domains) > 0 {
 		rules = append(rules, RoutingRule{Type: "field", Domain: domains, OutboundTag: "direct"})
 	}
 	if len(cidrs) > 0 {
 		rules = append(rules, RoutingRule{Type: "field", IP: cidrs, OutboundTag: "direct"})
+	}
+	parsed, _ := ParseExclusions(includes)
+	includeDomains := ExcludedDomains(parsed)
+	includeCIDRs := ExcludedCIDRs(parsed)
+	if len(includeDomains) > 0 {
+		rules = append(rules, RoutingRule{Type: "field", Domain: includeDomains, OutboundTag: "proxy"})
+	}
+	if len(includeCIDRs) > 0 {
+		rules = append(rules, RoutingRule{Type: "field", IP: includeCIDRs, OutboundTag: "proxy"})
+	}
+	if defaultOutbound != "proxy" {
+		rules = append(rules, RoutingRule{Type: "field", Network: "tcp,udp", OutboundTag: "direct"})
+	}
+	if len(rules) == 0 {
+		return nil
 	}
 	return &RoutingConfig{DomainStrategy: "AsIs", Rules: rules}
 }

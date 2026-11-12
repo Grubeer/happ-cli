@@ -122,3 +122,51 @@ func TestLoadExcludeEntriesExplicitFileMissingErrors(t *testing.T) {
 		t.Errorf("explicitly given missing exclude file %q must error", missing)
 	}
 }
+
+func TestConnectIncludeFlagsAndAutoFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "include.txt"), []byte("example.com\n192.0.2.0/24\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("connect:\n  include:\n    - cfg.example\n  default-outbound: direct\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setTestHome(t, dir)
+	cmd := newConnectCmd(withDeps())
+	inline, err := cmd.Flags().GetStringArray("include")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(inline, []string{"cfg.example"}) {
+		t.Fatalf("include default = %v", inline)
+	}
+	out, err := cmd.Flags().GetString("default-outbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "direct" {
+		t.Fatalf("default outbound = %q", out)
+	}
+	entries, err := loadIncludeEntries(inline, "", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(entries, []string{"cfg.example", "example.com", "192.0.2.0/24"}) {
+		t.Fatalf("include entries = %v", entries)
+	}
+}
+
+func TestConnectIncludeFlagRepeatable(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	cmd := newConnectCmd(withDeps())
+	if err := cmd.Flags().Parse([]string{"--include", "a.example", "--include", "b.example"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cmd.Flags().GetStringArray("include")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"a.example", "b.example"}) {
+		t.Fatalf("include = %v", got)
+	}
+}

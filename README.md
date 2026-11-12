@@ -194,6 +194,9 @@ In plain proxy mode, point apps at `socks5://127.0.0.1:10808` (Firefox: enable
 | `--auto-update`     | `false` (`auto-update` in config) | check GitHub for a newer release before connecting (best effort) |
 | `--exclude`         | —       | domain or IPv4 CIDR to send direct (repeatable) |
 | `--exclude-file`    | `<config dir>/exclude.txt` if present | file with exclusion entries, one per line |
+| `--include`         | —       | domain or IPv4 CIDR to send through proxy (repeatable) |
+| `--include-file`    | `<config dir>/include.txt` if present | file with included entries, one per line |
+| `--default-outbound` | `proxy` | `proxy` or `direct` for destinations not matched above |
 | `--sub`          | active  | subscription name                                   |
 
 The startup gate retries within its 10-second timeout. `--check-url` applies to
@@ -398,6 +401,17 @@ happ does not intercept system DNS itself.
 - **IPv6 is blocked in TUN/TUN-direct mode** (the proxy path is IPv4); IPv6-only destinations become unreachable while connected.
 - **Exclusions match domains only with sniffable traffic**: domain rules use the TLS SNI / HTTP Host seen by the inbound, so ECH/ESNI or non-sniffable traffic falls back to the IP path. IPv6 exclude entries are not supported.
 - **Kernel-level exclusion is Linux `--mode tun` only**; on macOS only xray's routing rules apply, so excluded traffic can still be pulled into the utun in `--mode tun` (use proxy mode there).
+
+### Include-only routing
+
+Use include rules with `--default-outbound direct` to proxy only selected domains or IPv4 networks. Exclusions are evaluated first and therefore stay direct even if they also match an include rule:
+
+```sh
+happ connect --include example.com --include-file ./work.txt --default-outbound direct
+```
+
+`include.txt` is loaded from the config directory when present. YAML keys are `connect.include`, `connect.include-file`, and `connect.default-outbound`. Domain matching has the same sniffing limitations described above.
+`--default-outbound direct` is not supported with `--mode tun-direct`, because this mode cannot install the required direct-socket bypass mark.
 - **DNS still goes through the tunnel** unless `--dns-proxy=false`.
 - **`tun-direct` needs manual routing on Linux**: xray-core's TUN only creates the network interface (see `proxy/tun/tun_linux.go`: "nothing more than create a network interface") and installs **no** system routes. Unlike `--mode tun`, it does not redirect traffic by itself — add routes/policy rules yourself, or use `--mode tun`.
 - `connect` runs in the **foreground**; there is no background daemon yet.
