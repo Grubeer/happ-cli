@@ -49,9 +49,13 @@ type connectOpts struct {
 	excludeFile   string   // --exclude-file path
 
 	// Resolved from exclude/excludeFile at connect time.
-	excludeEntries []string
-	directMark     int
-	directCIDRs    []string
+	excludeEntries  []string
+	include         []string
+	includeFile     string
+	includeEntries  []string
+	defaultOutbound string
+	directMark      int
+	directCIDRs     []string
 }
 
 func newConnectCmd(deps *Deps) *cobra.Command {
@@ -78,6 +82,9 @@ func newConnectCmd(deps *Deps) *cobra.Command {
 	opts.autoUpdate = cfg.Connect.AutoUpdate
 	opts.exclude = cfg.Connect.Exclude
 	opts.excludeFile = cfg.Connect.ExcludeFile
+	opts.include = cfg.Connect.Include
+	opts.includeFile = cfg.Connect.IncludeFile
+	opts.defaultOutbound = cfg.Connect.DefaultOutbound
 	mode = cfg.Connect.Mode
 
 	cmd := &cobra.Command{
@@ -94,6 +101,9 @@ func newConnectCmd(deps *Deps) *cobra.Command {
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeServerSelector(deps),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if mode == "tun-direct" && opts.defaultOutbound == "direct" {
+				return fmt.Errorf("--default-outbound direct is not supported with --mode tun-direct because direct traffic can loop into the TUN")
+			}
 			// Best-effort self-update before any tunnel work: a network error or
 			// a slow release server must never stop the connection.
 			if opts.autoUpdate {
@@ -152,6 +162,10 @@ func newConnectCmd(deps *Deps) *cobra.Command {
 				return err
 			}
 			opts.excludeEntries = entries
+			opts.includeEntries, err = loadIncludeEntries(opts.include, opts.includeFile, dir)
+			if err != nil {
+				return err
+			}
 			exclusions, excludeErrs := xray.ParseExclusions(entries)
 			for _, e := range excludeErrs {
 				fmt.Fprintf(os.Stderr, "warning: ignoring exclude entry %v\n", e)
@@ -201,6 +215,9 @@ func newConnectCmd(deps *Deps) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.autoUpdate, "auto-update", opts.autoUpdate, "check GitHub for a newer happ and install it before connecting (best effort)")
 	cmd.Flags().StringArrayVar(&opts.exclude, "exclude", opts.exclude, "domain or IPv4 CIDR to send outside the tunnel (repeatable)")
 	cmd.Flags().StringVar(&opts.excludeFile, "exclude-file", opts.excludeFile, "file with exclusion entries, one per line (default: <config dir>/exclude.txt if present)")
+	cmd.Flags().StringArrayVar(&opts.include, "include", opts.include, "domain to route through proxy (repeatable)")
+	cmd.Flags().StringVar(&opts.includeFile, "include-file", opts.includeFile, "file with included domains (default: <config dir>/include.txt if present)")
+	cmd.Flags().StringVar(&opts.defaultOutbound, "default-outbound", opts.defaultOutbound, "default route: proxy or direct")
 	_ = cmd.RegisterFlagCompletionFunc("sub", completeSubFlag(deps))
 	_ = cmd.RegisterFlagCompletionFunc("mode", func(*cobra.Command, []string, string) ([]cobra.Completion, cobra.ShellCompDirective) {
 		return []cobra.Completion{
@@ -210,6 +227,30 @@ func newConnectCmd(deps *Deps) *cobra.Command {
 		}, cobra.ShellCompDirectiveNoFileComp
 	})
 	return cmd
+}
+
+func loadIncludeEntries(inline []string, file, dir string) ([]string, error) {
+	entries := append([]string(nil), inline...)
+	path, explicit := file, file != ""
+	if !explicit {
+		path = filepath.Join(dir, "include.txt")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if explicit {
+			return nil, fmt.Errorf("read include file %s: %w", path, err)
+		}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read include file %s: %w", path, err)
+		}
+		return entries, nil
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line != "" {
+			entries = append(entries, line)
+		}
+	}
+	return entries, nil
 }
 
 // loadExcludeEntries combines inline exclude values with the lines of the
@@ -251,6 +292,7 @@ func runProxy(ctx context.Context, srv *link.Server, o connectOpts) error {
 		HTTPPort:  o.httpPort,
 		DNSProxy:  o.dnsProxy,
 		Exclude:   o.excludeEntries,
+		Include:   o.includeEntries, DefaultOutbound: o.defaultOutbound,
 	})
 	if err != nil {
 		return err
@@ -321,9 +363,10 @@ func runTun(ctx context.Context, srv *link.Server, o connectOpts) error {
 	pinned.Address = ips[0]
 
 	cfg, err := xray.BuildConfig(&pinned, xray.Options{
-		SocksPort:  o.socksPort,
-		DNSProxy:   o.dnsProxy,
-		Exclude:    o.excludeEntries,
+		SocksPort: o.socksPort,
+		DNSProxy:  o.dnsProxy,
+		Exclude:   o.excludeEntries,
+		Include:   o.includeEntries, DefaultOutbound: o.defaultOutbound,
 		DirectMark: o.directMark,
 	})
 	if err != nil {
@@ -428,7 +471,7 @@ func runTunDirect(ctx context.Context, srv *link.Server, o connectOpts) error {
 		}
 	}
 
-	cfg, err := xray.BuildConfig(srv, xray.Options{TUNDirect: true, DNSProxy: o.dnsProxy, Exclude: o.excludeEntries})
+	cfg, err := xray.BuildConfig(srv, xray.Options{TUNDirect: true, DNSProxy: o.dnsProxy, Exclude: o.excludeEntries, Include: o.includeEntries, DefaultOutbound: o.defaultOutbound})
 	if err != nil {
 		return err
 	}

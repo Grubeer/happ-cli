@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -25,13 +27,33 @@ func newSubCmd(deps *Deps) *cobra.Command {
 
 func subAddCmd(deps *Deps) *cobra.Command {
 	var name, userAgent string
+	var urlStdin bool
 	cmd := &cobra.Command{
 		Use:   "add <url>",
 		Short: "Add and fetch a subscription",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			entry, err := fetchEntry(cmd.Context(), deps, args[0], name, userAgent)
+			if urlStdin == (len(args) != 0) {
+				return fmt.Errorf("provide exactly one URL argument or use --url-stdin")
+			}
+			rawURL := ""
+			if urlStdin {
+				b, err := io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return fmt.Errorf("read subscription URL from stdin: %w", err)
+				}
+				rawURL = strings.TrimSpace(string(b))
+				if rawURL == "" {
+					return fmt.Errorf("subscription URL from stdin is empty")
+				}
+			} else {
+				rawURL = args[0]
+			}
+			entry, err := fetchEntry(cmd.Context(), deps, rawURL, name, userAgent)
 			if err != nil {
+				if urlStdin {
+					return fmt.Errorf("fetch subscription from stdin URL failed")
+				}
 				return err
 			}
 			if err := deps.Store.Upsert(entry); err != nil {
@@ -46,6 +68,7 @@ func subAddCmd(deps *Deps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&name, "name", "", "name for the subscription (default: derived from title/host)")
 	cmd.Flags().StringVar(&userAgent, "ua", profile.DefaultUserAgent, "User-Agent sent when fetching")
+	cmd.Flags().BoolVar(&urlStdin, "url-stdin", false, "read subscription URL from stdin")
 	return cmd
 }
 

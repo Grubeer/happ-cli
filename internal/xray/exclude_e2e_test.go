@@ -43,13 +43,17 @@ type proxyClient struct {
 }
 
 func startExcludingClient(t *testing.T, ssPort int, exclude []string) *proxyClient {
+	return startRoutingClient(t, ssPort, exclude, nil, "proxy")
+}
+
+func startRoutingClient(t *testing.T, ssPort int, exclude, include []string, defaultOutbound string) *proxyClient {
 	t.Helper()
 
 	socksPort := freePort(t)
 	cfg, err := BuildConfig(&link.Server{
 		Protocol: "shadowsocks", Address: "127.0.0.1", Port: ssPort,
 		Method: "aes-256-gcm", Password: "exclude-secret", Network: "tcp",
-	}, Options{SocksPort: socksPort, Exclude: exclude})
+	}, Options{SocksPort: socksPort, Exclude: exclude, Include: include, DefaultOutbound: defaultOutbound})
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
@@ -81,6 +85,28 @@ func startExcludingClient(t *testing.T, ssPort int, exclude []string) *proxyClie
 		return string(b), err
 	}
 	return &proxyClient{get: get}
+}
+
+func TestIncludeOnlyRoutingDefaultsDirect(t *testing.T) {
+	target := targetServer(t)
+	ss, ssPort := startSSServer(t)
+	client := startRoutingClient(t, ssPort, nil, []string{"localhost"}, "direct")
+	included, _ := http.NewRequest(http.MethodGet, target.URL, nil)
+	included.Host = "localhost"
+	if body := client.waitWorks(t, included); body != "pong" {
+		t.Fatalf("included request body = %q", body)
+	}
+	direct, _ := http.NewRequest(http.MethodGet, target.URL, nil) // IP destination is not included by domain.
+	if body := client.waitWorks(t, direct); body != "pong" {
+		t.Fatalf("default direct request body = %q", body)
+	}
+	ss.Close()
+	if _, err := client.get(included); err == nil {
+		t.Fatal("included domain succeeded after proxy shutdown; include did not require proxy")
+	}
+	if body, err := client.get(direct); err != nil || body != "pong" {
+		t.Fatalf("nonincluded default-direct request failed: body=%q err=%v", body, err)
+	}
 }
 
 // waitWorks retries req briefly, because a freshly started client needs a
